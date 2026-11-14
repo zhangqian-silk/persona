@@ -11,9 +11,10 @@ Only the association store's replies are synthetic: the page, the to-do list, it
 catalog come from the mock hub, and `GET/PUT /todos/{id}/repositories` is answered in the browser by an invented store,
 so no Agent, repository or Git checkout is involved. Checks, in English, light and dark at 1280 and 390 px, plus Large
 text at 390: the section draws saved repositories and their PRs as links without an editor; each repository carries its
-provider's own mark and its project address on one line; a saved link's complete title is its one hyperlink (and an
-untitled link falls back to its kind and number); the legacy `pr_url` is not repeated beside it; **Manage links**
-opens the dialog; another repository's URL is refused inline and a valid one is added with
+provider's own mark and its project address on one line, and its links and unlisted note are indented beneath it; a
+saved link's complete title is its one hyperlink (and an untitled link falls back to its kind and number); the legacy
+`pr_url` is not repeated beside it; **Manage links**
+opens the dialog and keeps the same hierarchy; another repository's URL is refused inline and a valid one is added with
 Enter; a revision conflict keeps the draft and **Discard edits and reload** takes the store's newest value; Save sends
 the revisions it was shown; Escape closes the dialog and returns the focus; a hub without the route shows only the
 legacy link. Screenshots stay outside Git (`REPOSITORY_EVIDENCE_DIR`, default `/tmp/persona-todo-repositories-evidence`).
@@ -67,10 +68,10 @@ def fixture_source(legacy=False, empty=False, rich=False):
       {kind: 'pull_request', number: '7', canonical_url: identity.canonical_url + '/pull/7', title: 'Fix the login redirect for every provider'},
       {kind: 'issue', number: '8', canonical_url: identity.canonical_url + '/issues/8'},
     ]),
-    row('api', gitlabIdentity, [
+    {...row('api', gitlabIdentity, [
       {kind: 'pull_request', number: '9', canonical_url: gitlabIdentity.canonical_url + '/-/merge_requests/9', title: 'Rotate access tokens without logging out'},
       {kind: 'issue', number: '10', canonical_url: gitlabIdentity.canonical_url + '/-/issues/10', title: 'Handle expired credentials gracefully across the whole flow'},
-    ]),
+    ]), catalog_state: 'unlisted'},
   ]});
   const set = () => state.rich ? richSet() : state.empty ? {schema_version: 1, manager: "assistant", todo_id: todoId, revision: state.revision, repositories: []}
     : ({schema_version: 1, manager: "assistant", todo_id: todoId, revision: state.revision, repositories: [{
@@ -229,6 +230,13 @@ def run(theme, width, suffix=""):
     press("Manage links")
     eventually("!!document.querySelector('[role=dialog]')")
     check("Pull request" in js("document.querySelector('[role=dialog]').innerText"), f"{where}: the dialog lists the links as rows")
+    settle()
+    # The shared editor uses the same hierarchy as the detail.
+    dialog = "document.querySelector('[role=dialog]')"
+    repo_text = js(f"{dialog}.querySelector('[data-repository-row] a span').getBoundingClientRect().left")
+    child_icon = js(f"{dialog}.querySelector('[data-repository-link] [data-link-icon]').getBoundingClientRect().left")
+    check(abs(child_icon - repo_text) <= 1, f"{where}: the editor indents links under their repository")
+    check(js(f"{dialog}.scrollWidth <= {dialog}.clientWidth"), f"{where}: the editor has no horizontal overflow")
     shot(f"dialog-{width}-{theme}{suffix}")
     press("Add issue or PR")
     eventually("!!document.querySelector('[role=dialog] input[type=url]')")
@@ -318,6 +326,18 @@ def run_rich(theme, width, suffix=""):
     check(js(f"{section}.querySelector('a[href$=\"/pull/7\"]') !== null"), f"{where}: the PR title is one hyperlink")
     check(js(f"{section}.querySelector('a[href$=\"/issues/8\"]') !== null"), f"{where}: an untitled issue falls back to its number")
     check(js("document.documentElement.scrollWidth <= document.documentElement.clientWidth"), f"{where}: no horizontal overflow")
+    # Hierarchy: a child row's mark sits under the repository's name/address, and its title starts beyond that mark.
+    repo_text = js(f"{section}.querySelector('[data-repository-row] a span').getBoundingClientRect().left")
+    child_icon = js(f"{section}.querySelector('[data-repository-link] [data-link-icon]').getBoundingClientRect().left")
+    child_text = js(f"{section}.querySelector('[data-repository-link] a > span').getBoundingClientRect().left")
+    note_left = js("""(() => {
+      const note = document.querySelector('[data-todo-repositories] [data-repository-note]');
+      const text = document.createRange(); text.selectNodeContents(note);
+      return text.getBoundingClientRect().left;
+    })()""")
+    check(abs(child_icon - repo_text) <= 1, f"{where}: child rows indent under the repository ({child_icon:.1f} vs {repo_text:.1f})")
+    check(child_text > child_icon + 10, f"{where}: child titles start beyond their mark ({child_text:.1f} vs {child_icon:.1f})")
+    check(abs(note_left - repo_text) <= 1, f"{where}: the unlisted note text belongs to the repository ({note_left:.1f})")
     # Small geometry, not classes: the mark is inline at icon scale, and rows use the compact density (not a tall
     # min-height). The kind icon, number and external mark sit on the title's first line, including when it wraps.
     check(js(f"{section}.querySelector('[data-repository-mark=\"github\"]').getBoundingClientRect().width") <= 16,
