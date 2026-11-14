@@ -160,16 +160,27 @@ def type_url(value):
       el.dispatchEvent(new Event('input', {bubbles: true})); })()""" % json.dumps(value))
 
 
+owned_tabs = set()
+
+
+def open_fixture_tab(url):
+    new_tab(url)
+    tab = current_tab()
+    target = tab.get("target_id") or tab.get("targetId")
+    if target:
+        owned_tabs.add(target)
+
+
 def fresh_tab():
-    """A real tab, with the previous run's tabs closed: a long run otherwise leaves dozens open and slows every load."""
+    """Close only tabs this fixture opened, retaining the current one until the next document is ready."""
     ensure_real_tab()
     current = current_tab()
     keep = current.get("target_id") or current.get("targetId")
-    for tab in list_tabs(include_chrome=False):
-        target = tab.get("target_id") or tab.get("targetId")
-        if target and target != keep:
+    for target in tuple(owned_tabs):
+        if target != keep:
             try:
                 close_tab(target)
+                owned_tabs.discard(target)
             except Exception:
                 pass
 
@@ -178,12 +189,12 @@ def open_todo(theme, width, legacy=False, large=False, empty=False, rich=False):
     fresh_tab()
     # The page is opened first and reloaded: Page.addScriptToEvaluateOnNewDocument only reaches documents created after
     # it, not the tab's first one.
-    new_tab(f"{WEB}/?token=mock")
+    open_fixture_tab(f"{WEB}/?token=mock")
     wait_for_load()
     js("localStorage.setItem('persona.token','mock'); localStorage.setItem('persona.language','en'); "
        "localStorage.setItem('persona.todos.view','list'); localStorage.setItem('persona.theme',%s); true" % json.dumps(theme))
     js("localStorage.setItem('persona.text-size', %s); true" % json.dumps("large" if large else "standard"))
-    new_tab(f"{WEB}/todos?id={TODO_ID}")
+    open_fixture_tab(f"{WEB}/todos?id={TODO_ID}")
     wait_for_load()
     cdp("Page.enable")
     # A production build registers its service worker: its cached shell carries the previous build's asset names, so the
