@@ -160,7 +160,22 @@ def type_url(value):
       el.dispatchEvent(new Event('input', {bubbles: true})); })()""" % json.dumps(value))
 
 
+def fresh_tab():
+    """A real tab, with the previous run's tabs closed: a long run otherwise leaves dozens open and slows every load."""
+    ensure_real_tab()
+    current = current_tab()
+    keep = current.get("target_id") or current.get("targetId")
+    for tab in list_tabs(include_chrome=False):
+        target = tab.get("target_id") or tab.get("targetId")
+        if target and target != keep:
+            try:
+                close_tab(target)
+            except Exception:
+                pass
+
+
 def open_todo(theme, width, legacy=False, large=False, empty=False, rich=False):
+    fresh_tab()
     # The page is opened first and reloaded: Page.addScriptToEvaluateOnNewDocument only reaches documents created after
     # it, not the tab's first one.
     new_tab(f"{WEB}/?token=mock")
@@ -180,8 +195,8 @@ def open_todo(theme, width, legacy=False, large=False, empty=False, rich=False):
     wait_for_load()
     eventually("!!window.repoFixture")
     cdp("Emulation.setDeviceMetricsOverride", width=width, height=1100 if width > 600 else 1700, deviceScaleFactor=1, mobile=width <= 600)
-    eventually("!!document.querySelector('[data-todo-repositories]')")
-    eventually("!document.querySelector('[data-todo-repositories]').innerText.includes('Loading')")
+    eventually("!!document.querySelector('[data-todo-repositories]')", seconds=30)
+    eventually("!document.querySelector('[data-todo-repositories]').innerText.includes('Loading')", seconds=30)
     if large:
         check(js("document.documentElement.dataset.textSize") == "large", "the page is at the Large text size")
     settle()
@@ -293,6 +308,32 @@ def run_rich(theme, width, suffix=""):
     check(js(f"{section}.querySelector('a[href$=\"/pull/7\"]') !== null"), f"{where}: the PR title is one hyperlink")
     check(js(f"{section}.querySelector('a[href$=\"/issues/8\"]') !== null"), f"{where}: an untitled issue falls back to its number")
     check(js("document.documentElement.scrollWidth <= document.documentElement.clientWidth"), f"{where}: no horizontal overflow")
+    # Small geometry, not classes: the mark is inline at icon scale, and rows use the compact density (not a tall
+    # min-height). The kind icon, number and external mark sit on the title's first line, including when it wraps.
+    check(js(f"{section}.querySelector('[data-repository-mark=\"github\"]').getBoundingClientRect().width") <= 16,
+          f"{where}: the provider mark is drawn at icon scale")
+    header_h = js(f"{section}.querySelector('[data-repository-row]').getBoundingClientRect().height")
+    # The shortest link row is a single line even where a long title wraps its neighbour.
+    link_h = js(f"Math.min(...[...{section}.querySelectorAll('[data-repository-link]')].map((r) => r.getBoundingClientRect().height))")
+    check(header_h <= 40, f"{where}: the repository row keeps the compact density ({header_h:.1f}px)")
+    check(link_h <= 40, f"{where}: a single-line link row keeps the compact density ({link_h:.1f}px)")
+    offsets = js("""(() => {
+      const row = document.querySelector('[data-todo-repositories] [data-repository-link]');
+      const title = row.querySelector('a > span');
+      const spans = row.querySelectorAll('a > span');
+      const line = title.getBoundingClientRect(), lh = parseFloat(getComputedStyle(title).lineHeight);
+      const center = (el) => { const r = el.getBoundingClientRect(); return r.top + r.height / 2; };
+      return [center(row.querySelector('[data-link-icon]')) - (line.top + lh / 2),
+              center(spans[1]) - (line.top + lh / 2),
+              center(row.querySelector('a > svg')) - (line.top + lh / 2)];
+    })()""")
+    check(all(abs(v) <= 3 for v in offsets), f"{where}: mark, number and external mark align with the title's first line ({offsets})")
+    if width <= 600:
+        lines = js("""(() => {
+          const title = document.querySelector('[data-todo-repositories] [data-repository-link] a > span');
+          return Math.round(title.getBoundingClientRect().height / parseFloat(getComputedStyle(title).lineHeight));
+        })()""")
+        check(lines >= 2, f"{where}: a long title still wraps in full ({lines} lines)")
     shot(f"marks-titles-{width}-{theme}{suffix}")
 
 

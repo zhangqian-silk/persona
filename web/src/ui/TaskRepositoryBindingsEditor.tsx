@@ -29,23 +29,17 @@ const linkTag = (identity: RepositoryIdentity, view: RepositoryLinkView) => `${i
 /** The address a person recognises as the project, without the scheme every row shares. */
 const repositoryAddress = (identity: RepositoryIdentity) => identity.canonical_url.replace(/^https?:\/\//, "");
 
-/** A repository's own mark, lead. The tile keeps the geometry of the stroke icons in the rows around it. */
-function RepositoryMarkTile({ identity }: { identity: RepositoryIdentity }) {
-  return <span className="flex size-7 shrink-0 items-center justify-center rounded-control bg-inset shadow-hairline">
-    <RepositoryMark provider={identity.provider} />
-  </span>;
-}
-
 /**
- * A saved repository on one line: its provider mark, its name when the catalog has one, and the project's address,
- * all inline instead of the old stacked name/host pair. The address is the link, so it is a comfortable target on a
- * phone without a second row; an address longer than the line cuts with the full value in its tooltip.
+ * A saved repository on one line: its provider mark at the same small scale as the stroke icons, its name when the
+ * catalog has one, and the project's address, all inline instead of the old stacked name/host pair. The address is
+ * the link, so it is a comfortable target on a phone without a second row; an address longer than the line cuts with
+ * the full value in its tooltip.
  */
 function RepositoryRow({ identity, name, children }: { identity: RepositoryIdentity; name?: string; children?: React.ReactNode }) {
-  return <div className="flex items-center gap-3 px-4 py-2.5" data-repository-row>
-    <RepositoryMarkTile identity={identity} />
+  return <div className="flex items-center gap-2.5 px-4 py-2" data-repository-row>
+    <RepositoryMark provider={identity.provider} />
     <a href={identity.canonical_url} target="_blank" rel="noreferrer noopener" title={identity.canonical_url}
-      className="flex min-w-0 flex-1 items-baseline gap-2 pointer-coarse:min-h-11">
+      className="flex touch-hit min-w-0 flex-1 items-center gap-2">
       {name && <span className="min-w-0 max-w-1/2 shrink-0 truncate text-[13px] text-ink">{name}</span>}
       <span className="min-w-0 flex-1 truncate text-[11.5px] text-ink-3">{repositoryAddress(identity)}</span>
     </a>
@@ -58,16 +52,16 @@ function LinkRow({ identity, view, onRemove, disabled }: { identity: RepositoryI
   const kind = t(view.kind === "issue" ? "task-repositories.issue" : "task-repositories.pull_request");
   const icon = view.kind === "issue" ? "target" : identity.provider === "gitlab" ? "merge" : "pullRequest";
   const tag = linkTag(identity, view);
-  return <div className="flex items-start gap-1 px-4" data-repository-link>
-    <span data-link-icon={icon} className="mt-1 shrink-0 text-ink-3"><Icon name={icon} size={14} /></span>
+  return <div className="flex items-start gap-2 px-4 py-2" data-repository-link>
+    <span data-link-icon={icon} className="mt-0.5 shrink-0 text-ink-3"><Icon name={icon} size={14} /></span>
     <a href={view.url} target="_blank" rel="noreferrer noopener" aria-label={`${kind} ${tag} · ${identity.path}${view.title ? ` · ${view.title}` : ""}`}
-      className="flex min-h-11 min-w-0 flex-1 items-start gap-2 py-1 text-[12.5px] leading-snug text-ink-3 hover:underline">
+      className="flex touch-hit min-w-0 flex-1 items-start gap-2 text-[12.5px] leading-snug text-ink-3 hover:underline">
       {view.title
         ? <><span className="min-w-0 break-words">{view.title}</span><span className="shrink-0 font-medium tabular-nums text-accent-ink">{tag}</span></>
         : <><span className="shrink-0">{kind}</span><span className="shrink-0 font-medium tabular-nums text-accent-ink">{tag}</span></>}
       <Icon name="external" size={11} className="mt-1 ml-auto shrink-0 text-ink-3" />
     </a>
-    {onRemove && <IconButton icon="x" size={24} iconSize={12} label={t("task-repositories.remove_link", { link: tag })} onClick={onRemove} disabled={disabled} />}
+    {onRemove && <IconButton icon="x" size={24} iconSize={12} className="-mt-0.5" label={t("task-repositories.remove_link", { link: tag })} onClick={onRemove} disabled={disabled} />}
   </div>;
 }
 
@@ -195,7 +189,7 @@ function RepositoryPicker({ catalog, selected, disabled, onPick }: { catalog: Re
         }}>
           {rows.map((row) => <button key={row.id} type="button" role="option" aria-selected={false} disabled={disabled} onClick={() => pick(row.id)}
             className="flex min-h-11 w-full items-center gap-3 rounded-control px-3 py-2 text-left transition-colors hover:bg-hover focus-visible:bg-hover">
-            <RepositoryMarkTile identity={row} />
+            <RepositoryMark provider={row.provider} />
             <span className="min-w-0 flex-1">
               <span className="block truncate text-[12.5px] font-medium text-ink">{row.name || row.path}</span>
               <span className="block truncate text-[11.5px] text-ink-3">{row.path} · {hostOf(row)}</span>

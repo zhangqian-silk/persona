@@ -190,8 +190,11 @@ it("draws the provider's own mark and the project address inline, with a merge m
   await render();
   await answer(calls[0], gitlabSet);
   const section = document.querySelector("[data-todo-repositories]")!;
-  expect(section.querySelector('[data-repository-mark="gitlab"]')).toBeTruthy();
+  const mark = section.querySelector('[data-repository-mark="gitlab"]')!;
+  expect(mark).toBeTruthy();
   const row = section.querySelector("[data-repository-row]")!;
+  // The mark is inline in the row itself, not inside the old 28 px tile.
+  expect(mark.parentElement).toBe(row);
   expect(row.querySelector("a")!.getAttribute("href")).toBe(gitlabIdentity.canonical_url);
   expect(row.textContent).toContain("gitlab.example.com/team/api");
   expect(section.textContent).not.toContain("GitLab ·");
@@ -208,12 +211,9 @@ it("puts a saved link's complete title in its single hyperlink instead of only t
   expect(links[0].textContent).toContain("#7");
   expect(links[1].textContent).toContain("Reported crash on the first screen");
   expect(links[1].textContent).toContain("#8");
-  // A title is plain text: markup in it is escaped, never drawn, and its line can wrap instead of being cut away.
+  // A title is plain text: markup in it is escaped, never drawn, and the whole text stays in one hyperlink.
   expect(document.querySelector("[data-todo-repositories]")!.innerHTML).not.toContain("<b>redirect</b>");
-  const title = links[0].querySelector("span")!;
-  expect(title.textContent).toBe(`Fix "quoted" <b>redirect</b> for the login flow across every provider`);
-  expect(title.className).not.toContain("truncate");
-  expect(title.className).toContain("break-words");
+  expect(links[0].querySelector("span")!.textContent).toBe(`Fix "quoted" <b>redirect</b> for the login flow across every provider`);
 });
 
 it("keeps loaded source titles through an editor save and sends them with their own links", async () => {
