@@ -1,5 +1,11 @@
 # Lessons: web UI and interactions
 
+## File drop targets must cancel navigation even while busy (#7446)
+
+Cancel file `dragover` and `drop` defaults before a busy-state guard: ignoring a second file must not let the browser
+open it and leave the app. Keep the busy guard on the upload and drag highlight. `Skills.test.tsx` checks both events
+while a ZIP preview is pending, including that the first check completes and no second check starts.
+
 ## A paging hub pushes no sessions: a computer's Agents are not in `sessions[mid]` (web audit items 3 and 30)
 
 A connection that asked for `sessions_list` gets no `sessions` / `sessions_delta` pushes (docs/protocol/protocol.md

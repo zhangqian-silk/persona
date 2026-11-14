@@ -121,6 +121,27 @@ it("checks a ZIP dropped on the drop zone like a chosen one", async () => {
   expect(document.querySelector('[role="dialog"]')?.textContent).toContain(preview.destination);
 });
 
+it.each(["dragover", "drop"])("prevents browser navigation on %s while keeping the pending ZIP check", async (type) => {
+  hold = () => {};
+  await click("settings-skills.upload");
+  await upload();
+  expect(writes.map((w) => w.op)).toEqual(["preview"]);
+  const pending = hold;
+  const zone = document.querySelector<HTMLElement>('[data-testid="skill-zip-drop"]')!;
+  const file = new File(["another ZIP"], "another.zip", { type: "application/zip" });
+  const event = new Event(type, { bubbles: true, cancelable: true });
+  Object.defineProperty(event, "dataTransfer", { value: { files: [file], types: ["Files"] } });
+  await act(async () => { zone.dispatchEvent(event); });
+  await flush();
+  expect(event.defaultPrevented).toBe(true);
+  expect(zone.className).not.toContain("border-accent");
+  expect(zone.textContent).toContain("synthetic.zip");
+  expect(writes.map((w) => w.op)).toEqual(["preview"]);
+  await act(async () => { pending?.(json(preview)); });
+  await flush();
+  expect(document.querySelector('[role="dialog"]')?.textContent).toContain(preview.destination);
+});
+
 it("cancels a preview without installing and returns keyboard focus to Upload ZIP", async () => {
   await click("settings-skills.upload");
   await upload();
