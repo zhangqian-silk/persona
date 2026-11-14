@@ -2564,7 +2564,7 @@
   },
   {
     "name": "todo_repositories_set",
-    "description": "Replace the business repository associations of a to-do. Read todo_repositories_get and repositories_list first, and supply their exact revisions. An explicit empty array removes associations only, without deleting code or changing task progress. Existing source snapshots remain unchanged; remove and reselect a repository to adopt a changed catalog identity. Associations remain editable after execution. Omitted per-repository links preserve existing links; [] clears them. On conflict read again and reconcile, never blindly retry.",
+    "description": "Replace the business repository associations of a to-do. Read todo_repositories_get and repositories_list first, and supply their exact revisions. An explicit empty array removes associations only, without deleting code or changing task progress. Existing source snapshots remain unchanged; remove and reselect a repository to adopt a changed catalog identity. Associations remain editable after execution. Omitted per-repository links preserve existing links; [] clears them. On conflict read again and reconcile, never blindly retry. Optional title is the full source title as plain text; omitted or empty titles preserve known titles for retained links.",
     "input_schema": {
       "type": "object",
       "required": [
@@ -2636,6 +2636,10 @@
                     },
                     "number": {
                       "type": "string"
+                    },
+                    "title": {
+                      "type": "string",
+                      "maxLength": 1024
                     }
                   },
                   "additionalProperties": false
@@ -2651,7 +2655,7 @@
   },
   {
     "name": "todo_repository_links_set",
-    "description": "Replace one repository's issue/PR links using the exact revision from todo_repositories_get. Each entry is either {url} or {kind,number}; links must belong to the saved repository identity. Multiple PRs are independent, and task progress and completion remain independently verified. [] clears links. On conflict read again and reconcile.",
+    "description": "Replace one repository's issue/PR links using the exact revision from todo_repositories_get. Each entry is either {url} or {kind,number}; links must belong to the saved repository identity. Multiple PRs are independent, and task progress and completion remain independently verified. [] clears links. On conflict read again and reconcile. Optional title is the full source title as plain text; omitted or empty titles preserve known titles for retained links.",
     "input_schema": {
       "type": "object",
       "required": [
@@ -2689,6 +2693,10 @@
               },
               "number": {
                 "type": "string"
+              },
+              "title": {
+                "type": "string",
+                "maxLength": 1024
               }
             },
             "additionalProperties": false
@@ -2700,12 +2708,11 @@
   },
   {
     "name": "todo_repository_links_add",
-    "description": "Add issue/PR URLs to an existing to-do. Use this after finding or opening related work, without asking the user to edit metadata manually. The manager derives and groups repository identities, preserving existing aliases, refs and source snapshots. A repository need not be preconfigured. Duplicate URLs do not duplicate links; an explicit call may restore a previously removed link. The batch is atomic. Read todo_get or todo_repositories_get for current associations; use the revision-checked set tools for removal or replacement. Links are context, never evidence by themselves that work is merged, deployed or complete.",
+    "description": "Add issue/PR links to an existing to-do, including their full titles when known. Use this after finding or opening related work, without asking the user to edit metadata manually. The manager derives and groups repository identities, preserving existing aliases, refs and source snapshots. A repository need not be preconfigured. Use links: [{url,title}] for titled work, or urls for older URL-only callers; provide one to 50 links in total. Supply the actual issue/PR title from the source, never a guessed title or the to-do title. A nonempty title refreshes an existing link; URL-only calls preserve titles. Duplicate URLs do not duplicate links; an explicit call may restore a previously removed link. The batch is atomic. Read todo_get or todo_repositories_get for current associations; use the revision-checked set tools for removal or replacement. Links are context, never evidence by themselves that work is merged, deployed or complete.",
     "input_schema": {
       "type": "object",
       "required": [
-        "id",
-        "urls"
+        "id"
       ],
       "properties": {
         "id": {
@@ -2718,9 +2725,41 @@
           "items": {
             "type": "string"
           }
+        },
+        "links": {
+          "type": "array",
+          "maxItems": 50,
+          "items": {
+            "type": "object",
+            "required": [
+              "url"
+            ],
+            "properties": {
+              "url": {
+                "type": "string"
+              },
+              "title": {
+                "type": "string",
+                "maxLength": 1024
+              }
+            },
+            "additionalProperties": false
+          }
         }
       },
-      "additionalProperties": false
+      "additionalProperties": false,
+      "anyOf": [
+        {
+          "required": [
+            "urls"
+          ]
+        },
+        {
+          "required": [
+            "links"
+          ]
+        }
+      ]
     }
   },
   {
@@ -2901,6 +2940,10 @@
                         },
                         "number": {
                           "type": "string"
+                        },
+                        "title": {
+                          "type": "string",
+                          "maxLength": 1024
                         }
                       },
                       "additionalProperties": false
