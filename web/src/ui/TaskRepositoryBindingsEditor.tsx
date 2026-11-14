@@ -52,7 +52,7 @@ function LinkRow({ identity, view, onRemove, disabled }: { identity: RepositoryI
   const kind = t(view.kind === "issue" ? "task-repositories.issue" : "task-repositories.pull_request");
   const icon = view.kind === "issue" ? "target" : identity.provider === "gitlab" ? "merge" : "pullRequest";
   const tag = linkTag(identity, view);
-  return <div className="flex items-start gap-2 px-4 py-2" data-repository-link>
+  return <div className="flex items-start gap-2 py-2 pr-4 pl-10" data-repository-link>
     <span data-link-icon={icon} className="mt-0.5 shrink-0 text-ink-3"><Icon name={icon} size={14} /></span>
     <a href={view.url} target="_blank" rel="noreferrer noopener" aria-label={`${kind} ${tag} · ${identity.path}${view.title ? ` · ${view.title}` : ""}`}
       className="flex touch-hit min-w-0 flex-1 items-start gap-2 text-[12.5px] leading-snug text-ink-3 hover:underline">
@@ -122,11 +122,11 @@ function RepositoryDraftRow({ row, entry, saved, pending, onChange, onRemove }: 
           onRemove={() => onChange({ links: links.filter((_, i) => i !== index) })} /> : null;
       })}
     </div>
-    <div className="px-4 py-2"><AddLink identity={identity} links={links} pending={pending} onAdd={(link) => onChange({ links: [...links, link] })} /></div>
-    {!!saved?.catalog_state && saved.catalog_state !== "current" && <p role="status" className="px-4 py-2 text-[11.5px] leading-snug text-ink-3">
+    <div className="py-2 pr-4 pl-10"><AddLink identity={identity} links={links} pending={pending} onAdd={(link) => onChange({ links: [...links, link] })} /></div>
+    {!!saved?.catalog_state && saved.catalog_state !== "current" && <p role="status" data-repository-note className="py-2 pr-4 pl-10 text-[11.5px] leading-snug text-ink-3">
       {t(saved.catalog_state === "removed" ? "task-repositories.catalog_removed" : saved.catalog_state === "identity_changed" ? "task-repositories.identity_changed" : "task-repositories.unlisted")}
     </p>}
-    <details className="px-4 text-[11.5px] text-ink-3">
+    <details className="pr-4 pl-10 text-[11.5px] text-ink-3">
       <summary className="flex min-h-11 cursor-pointer items-center gap-2">
         <Icon name="branch" size={13} />
         <span className="min-w-0 flex-1 truncate">{t("task-repositories.source_options")}</span>
@@ -332,7 +332,7 @@ function TodoRepositoryBindingsSession({ manager, owner, todoId, legacyPRs = [],
               const view = repositoryLinkView(repository.source_snapshot.identity, link);
               return view ? <LinkRow key={`${link.kind}:${link.number}`} identity={repository.source_snapshot.identity} view={view} /> : null;
             })}
-            {!!repository.catalog_state && repository.catalog_state !== "current" && <p role="status" className="px-4 py-2 text-[11.5px] leading-snug text-ink-3">
+            {!!repository.catalog_state && repository.catalog_state !== "current" && <p role="status" data-repository-note className="py-2 pr-4 pl-10 text-[11.5px] leading-snug text-ink-3">
               {t(repository.catalog_state === "removed" ? "task-repositories.catalog_removed" : repository.catalog_state === "identity_changed" ? "task-repositories.identity_changed" : "task-repositories.unlisted")}
             </p>}
           </Fragment>)}
