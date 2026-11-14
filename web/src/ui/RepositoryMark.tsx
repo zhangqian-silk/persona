@@ -5,8 +5,8 @@
 import githubMark from "./brands/github.svg";
 import gitlabMark from "./brands/gitlab.svg";
 
-/** `size` is the box the mark is drawn in, matching the 14 px stroke icons beside it. */
-export function RepositoryMark({ provider, size = 15, className = "" }: { provider: string; size?: number; className?: string }) {
+/** `size` is the box the mark is drawn in, the same small scale as the stroke icons beside it. */
+export function RepositoryMark({ provider, size = 14, className = "" }: { provider: string; size?: number; className?: string }) {
   if (provider === "github") {
     const mask = `url("${githubMark}") center / contain no-repeat`;
     return <span aria-hidden data-repository-mark="github" className={`inline-block shrink-0 bg-ink ${className}`}
