@@ -10,11 +10,13 @@ Input for Browser Use, from the repository root:
 Only the association store's replies are synthetic: the page, the to-do list, its rows and the assistant's repository
 catalog come from the mock hub, and `GET/PUT /todos/{id}/repositories` is answered in the browser by an invented store,
 so no Agent, repository or Git checkout is involved. Checks, in English, light and dark at 1280 and 390 px, plus Large
-text at 390: the section draws saved repositories and their PRs as links without an editor; the legacy `pr_url` is not
-repeated beside it; **Manage links** opens the dialog; another repository's URL is refused inline and a valid one is
-added with Enter; a revision conflict keeps the draft and **Discard edits and reload** takes the store's newest value;
-Save sends the revisions it was shown; Escape closes the dialog and returns the focus; a hub without the route shows only
-the legacy link. Screenshots stay outside Git (`REPOSITORY_EVIDENCE_DIR`, default `/tmp/persona-todo-repositories-evidence`).
+text at 390: the section draws saved repositories and their PRs as links without an editor; each repository carries its
+provider's own mark and its project address on one line; a saved link's complete title is its one hyperlink (and an
+untitled link falls back to its kind and number); the legacy `pr_url` is not repeated beside it; **Manage links**
+opens the dialog; another repository's URL is refused inline and a valid one is added with
+Enter; a revision conflict keeps the draft and **Discard edits and reload** takes the store's newest value; Save sends
+the revisions it was shown; Escape closes the dialog and returns the focus; a hub without the route shows only the
+legacy link. Screenshots stay outside Git (`REPOSITORY_EVIDENCE_DIR`, default `/tmp/persona-todo-repositories-evidence`).
 """
 
 import json
@@ -29,6 +31,7 @@ EVIDENCE = Path(os.environ.get("REPOSITORY_EVIDENCE_DIR", "/tmp/persona-todo-rep
 EVIDENCE.mkdir(parents=True, exist_ok=True)
 
 IDENTITY = {"provider": "github", "instance_url": "https://github.com", "path": "example/web", "canonical_url": "https://github.com/example/web"}
+GITLAB_IDENTITY = {"provider": "gitlab", "instance_url": "https://gitlab.example.com", "path": "team/api", "canonical_url": "https://gitlab.example.com/team/api"}
 CATALOG = {"manager": "assistant", "catalog_revision": 4, "repositories": [
     {**IDENTITY, "id": "web", "name": "Web app", "verified_at": "2026-01-01T00:00:00Z"},
     {"provider": "github", "instance_url": "https://github.com", "path": "example/docs",
@@ -50,12 +53,26 @@ assert TODO, "the mock hub lists no to-do (start it with MOCK_TODO_LIST=1)"
 TODO_ID, LEGACY_PR = TODO["id"], TODO.get("pr_url", "")
 
 
-def fixture_source(legacy=False, empty=False):
+def fixture_source(legacy=False, empty=False, rich=False):
     """The whole page's fetch shim, installed before any page script so the section's first read finds it."""
     return """(() => {
-  const state = window.repoFixture = {calls: [], revision: 2, numbers: [3211, 3212], catalogRevision: 4, failNextSave: null, legacy: %(legacy)s, empty: %(empty)s};
-  const identity = %(identity)s, catalog = %(catalog)s, todoId = %(todo)s;
-  const set = () => state.empty ? {schema_version: 1, manager: "assistant", todo_id: todoId, revision: state.revision, repositories: []}
+  const state = window.repoFixture = {calls: [], revision: 2, numbers: [3211, 3212], catalogRevision: 4, failNextSave: null, legacy: %(legacy)s, empty: %(empty)s, rich: %(rich)s};
+  const identity = %(identity)s, gitlabIdentity = %(gitlab)s, catalog = %(catalog)s, todoId = %(todo)s;
+  const row = (id, source, links) => ({repo_id: id, requested_ref: {kind: 'default'},
+    source_snapshot: {identity: source, clone_url: source.canonical_url, catalog_revision: 4, transport_origin: 'canonical_default'},
+    links, catalog_state: 'current'});
+  // Provider marks, one-line project addresses and the links' own full titles.
+  const richSet = () => ({schema_version: 1, manager: "assistant", todo_id: todoId, revision: state.revision, repositories: [
+    row('web', identity, [
+      {kind: 'pull_request', number: '7', canonical_url: identity.canonical_url + '/pull/7', title: 'Fix the login redirect for every provider'},
+      {kind: 'issue', number: '8', canonical_url: identity.canonical_url + '/issues/8'},
+    ]),
+    row('api', gitlabIdentity, [
+      {kind: 'pull_request', number: '9', canonical_url: gitlabIdentity.canonical_url + '/-/merge_requests/9', title: 'Rotate access tokens without logging out'},
+      {kind: 'issue', number: '10', canonical_url: gitlabIdentity.canonical_url + '/-/issues/10', title: 'Handle expired credentials gracefully across the whole flow'},
+    ]),
+  ]});
+  const set = () => state.rich ? richSet() : state.empty ? {schema_version: 1, manager: "assistant", todo_id: todoId, revision: state.revision, repositories: []}
     : ({schema_version: 1, manager: "assistant", todo_id: todoId, revision: state.revision, repositories: [{
     repo_id: 'web', requested_ref: {kind: 'default'},
     source_snapshot: {identity, clone_url: identity.canonical_url, catalog_revision: 4, transport_origin: 'canonical_default'},
@@ -80,7 +97,8 @@ def fixture_source(legacy=False, empty=False):
     return reply(set());
   };
   return true;
-})()""" % {"legacy": "true" if legacy else "false", "empty": "true" if empty else "false", "identity": json.dumps(IDENTITY), "catalog": json.dumps(CATALOG), "todo": json.dumps(TODO_ID)}
+})()""" % {"legacy": "true" if legacy else "false", "empty": "true" if empty else "false", "rich": "true" if rich else "false",
+          "identity": json.dumps(IDENTITY), "gitlab": json.dumps(GITLAB_IDENTITY), "catalog": json.dumps(CATALOG), "todo": json.dumps(TODO_ID)}
 
 
 def js(expression):
@@ -142,7 +160,7 @@ def type_url(value):
       el.dispatchEvent(new Event('input', {bubbles: true})); })()""" % json.dumps(value))
 
 
-def open_todo(theme, width, legacy=False, large=False, empty=False):
+def open_todo(theme, width, legacy=False, large=False, empty=False, rich=False):
     # The page is opened first and reloaded: Page.addScriptToEvaluateOnNewDocument only reaches documents created after
     # it, not the tab's first one.
     new_tab(f"{WEB}/?token=mock")
@@ -157,7 +175,7 @@ def open_todo(theme, width, legacy=False, large=False, empty=False):
     # reloaded page would run old code. Unregister and clear its caches (a dev server has none).
     js("navigator.serviceWorker?.getRegistrations().then((rs) => Promise.all(rs.map((r) => r.unregister())))")
     js("caches?.keys().then((ks) => Promise.all(ks.map((k) => caches.delete(k))))")
-    cdp("Page.addScriptToEvaluateOnNewDocument", source=fixture_source(legacy=legacy, empty=empty))
+    cdp("Page.addScriptToEvaluateOnNewDocument", source=fixture_source(legacy=legacy, empty=empty, rich=rich))
     cdp("Page.reload")
     wait_for_load()
     eventually("!!window.repoFixture")
@@ -225,6 +243,8 @@ def run(theme, width, suffix=""):
     shot(f"section-saved-{width}-{theme}{suffix}")
     press("Manage links")
     eventually("!!document.querySelector('[role=dialog]')")
+    # The dialog's document-level Escape listener is attached in an effect after its first paint: let it run.
+    settle()
     # A real Escape on the page: the dialog's own handler closes it and the focus goes back to the button.
     cdp("Input.dispatchKeyEvent", type="keyDown", key="Escape", code="Escape", windowsVirtualKeyCode=27, nativeVirtualKeyCode=27)
     cdp("Input.dispatchKeyEvent", type="keyUp", key="Escape", code="Escape", windowsVirtualKeyCode=27, nativeVirtualKeyCode=27)
@@ -252,11 +272,37 @@ def run_legacy(theme="light", width=1280):
     shot(f"section-legacy-{width}-{theme}")
 
 
+def run_rich(theme, width, suffix=""):
+    """Provider marks, the one-line address, and a link's complete title as its hyperlink."""
+    where = f"{theme} {width}px{suffix} marks and titles"
+    open_todo(theme, width, large=bool(suffix), rich=True)
+    section = "document.querySelector('[data-todo-repositories]')"
+    check(js(f"{section}.querySelectorAll('[data-repository-mark=\"github\"]').length") == 1, f"{where}: the GitHub repository carries GitHub's mark")
+    check(js(f"{section}.querySelectorAll('[data-repository-mark=\"gitlab\"]').length") == 1, f"{where}: the GitLab repository carries GitLab's mark")
+    check(js(f"{section}.innerText.includes('github.com/example/web')"), f"{where}: the GitHub project address is drawn inline")
+    check(js(f"{section}.innerText.includes('gitlab.example.com/team/api')"), f"{where}: the GitLab project address is drawn inline")
+    check(js(f"{section}.innerText.includes('Fix the login redirect for every provider')"), f"{where}: a saved PR shows its full title")
+    check(js(f"{section}.innerText.includes('Rotate access tokens without logging out')"), f"{where}: a saved MR shows its full title")
+    check(js(f"{section}.innerText.includes('Handle expired credentials gracefully across the whole flow')"), f"{where}: a saved issue shows its full title")
+    check(js(f"{section}.querySelector('a[href$=\"/-/merge_requests/9\"]').getAttribute('aria-label').includes('!9')"),
+          f"{where}: a GitLab MR keeps GitLab's !number")
+    check(js(f"{section}.querySelectorAll('[data-link-icon=\"merge\"]').length") == 1, f"{where}: the MR row uses the merge mark")
+    check(js(f"{section}.querySelectorAll('[data-link-icon=\"pullRequest\"]').length") == 1, f"{where}: the GitHub PR row uses the pull-request mark")
+    check(js(f"{section}.querySelectorAll('[data-link-icon=\"target\"]').length") == 2, f"{where}: both issue rows use the issue mark")
+    check(js(f"{section}.querySelector('a[href$=\"/-/merge_requests/9\"]') !== null"), f"{where}: the MR title is one hyperlink")
+    check(js(f"{section}.querySelector('a[href$=\"/pull/7\"]') !== null"), f"{where}: the PR title is one hyperlink")
+    check(js(f"{section}.querySelector('a[href$=\"/issues/8\"]') !== null"), f"{where}: an untitled issue falls back to its number")
+    check(js("document.documentElement.scrollWidth <= document.documentElement.clientWidth"), f"{where}: no horizontal overflow")
+    shot(f"marks-titles-{width}-{theme}{suffix}")
+
+
 try:
     for theme in ("light", "dark"):
         for width in (1280, 390):
             run(theme, width)
+            run_rich(theme, width)
     run("light", 390, "-large")
+    run_rich("light", 390, "-large")
     run_empty()
     run_legacy()
     print("VERDICT: pass")
