@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { expect, it } from "vitest";
 import fixture from "../../../spec/fixtures/task-repositories/contract.json";
-import { cleanRepositoryDraft, repositoryDraft, repositoryLinkView, repositoryRelativePath, validRepositoryAlias, validRequestedRef, type RequestedRef, type TaskRepository } from "./task-repositories";
+import { cleanRepositoryDraft, repositoryDraft, repositoryLinkTitle, repositoryLinkView, repositoryRelativePath, validRepositoryAlias, validRepositorySet, validRequestedRef, validTaskRepositoryLink, type RequestedRef, type TaskRepository, type TaskRepositorySet } from "./task-repositories";
 
 it("shares alias, layout and typed-ref fixtures with the manager", () => {
   for (const alias of fixture.aliases.valid) expect(validRepositoryAlias(alias), alias).toBe(true);
@@ -40,4 +40,51 @@ it("reads saved kind and number for GitHub and GitLab, keeping the number a stri
   expect(repositoryLinkView(gitlab, { url: "https://gitlab.example.com/team/api/-/merge_requests/9007199254740993" })).toMatchObject({ number: "9007199254740993" });
   expect(repositoryLinkView(github, { kind: "issue", number: "0" })).toBeNull();
   expect(repositoryLinkView({ ...github, provider: "bitbucket" }, { kind: "issue", number: "1" })).toBeNull();
+});
+
+it("carries a full source title on the exact saved link, never onto another repository or number", () => {
+  const link = { kind: "pull_request" as const, number: "7", canonical_url: "https://github.com/example/web/pull/7", title: "  Fix the login redirect  " };
+  expect(repositoryLinkView(github, link)).toEqual({ kind: "pull_request", number: "7", url: "https://github.com/example/web/pull/7", label: "PR #7", title: "Fix the login redirect" });
+  const elsewhere = { ...link, canonical_url: "https://github.com/example/docs/pull/7" };
+  expect(repositoryLinkView(github, elsewhere)).toBeNull();
+  expect(repositoryLinkView(github, { ...link, title: "two\nlines" })).toEqual({ kind: "pull_request", number: "7", url: "https://github.com/example/web/pull/7", label: "PR #7" });
+});
+
+it("accepts the same title bounds as the server and keeps titles through a draft round trip", () => {
+  expect(repositoryLinkTitle("  A title  ")).toBe("A title");
+  expect(repositoryLinkTitle("x".repeat(1024))).toHaveLength(1024);
+  expect(repositoryLinkTitle("x".repeat(1025))).toBeUndefined();
+  expect(repositoryLinkTitle("é".repeat(512))).toHaveLength(512);
+  expect(repositoryLinkTitle("é".repeat(513))).toBeUndefined();
+  expect(repositoryLinkTitle("a\u0000b")).toBeUndefined();
+  expect(repositoryLinkTitle("   ")).toBeUndefined();
+  const row = { repo_id: "web", requested_ref: { kind: "default" }, links: [
+    { kind: "pull_request", number: "7", canonical_url: "https://github.com/example/web/pull/7", title: "Fix the redirect" },
+    { kind: "issue", number: "8", canonical_url: "https://github.com/example/web/issues/8", title: "Reported crash" },
+  ] } as TaskRepository;
+  expect(repositoryDraft([row])[0].links).toEqual([
+    { kind: "pull_request", number: "7", title: "Fix the redirect" },
+    { kind: "issue", number: "8", title: "Reported crash" },
+  ]);
+  expect(cleanRepositoryDraft([{ repo_id: "web", links: [
+    { kind: "pull_request", number: "7", title: "  Fix the redirect  " },
+    { url: "https://github.com/example/web/issues/8", title: "Reported crash" },
+    { kind: "issue", number: "9", title: "x".repeat(1025) },
+  ] }])[0].links).toEqual([
+    { kind: "pull_request", number: "7", title: "Fix the redirect" },
+    { url: "https://github.com/example/web/issues/8", title: "Reported crash" },
+    { kind: "issue", number: "9" },
+  ]);
+});
+
+it("validates a saved response's link against the repository it claims", () => {
+  const link = { kind: "pull_request" as const, number: "7", canonical_url: "https://github.com/example/web/pull/7", title: "Fix the redirect" };
+  const envelope = (links: TaskRepositorySet["repositories"][number]["links"]): TaskRepositorySet => ({ schema_version: 1, manager: "assistant", todo_id: "todo", revision: 1,
+    repositories: [{ repo_id: "web", requested_ref: { kind: "default" }, source_snapshot: { identity: github, clone_url: github.canonical_url, transport_origin: "canonical_default", catalog_revision: 1 }, links }] });
+  expect(validTaskRepositoryLink(github, link)).toBe(true);
+  expect(validRepositorySet(envelope([link]), "assistant", "todo")).toBe(true);
+  expect(validTaskRepositoryLink(github, { ...link, canonical_url: "https://github.com/example/docs/pull/7" })).toBe(false);
+  expect(validRepositorySet(envelope([{ ...link, canonical_url: "https://github.com/example/docs/pull/7" }]), "assistant", "todo")).toBe(false);
+  expect(validRepositorySet(envelope([{ ...link, title: "bad\u0000title" }]), "assistant", "todo")).toBe(false);
+  expect(validRepositorySet(envelope([{ ...link, title: " padded " }]), "assistant", "todo")).toBe(false);
 });

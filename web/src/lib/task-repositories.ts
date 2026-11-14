@@ -11,8 +11,8 @@ export type RepositoryLayout = "root" | "container";
 export type RepositorySourceSnapshot = {
   identity: RepositoryIdentity; clone_url: string; transport_origin: "catalog" | "canonical_default"; catalog_revision: number;
 };
-export type RepositoryLinkInput = { url: string; kind?: never; number?: never } | { kind: "issue" | "pull_request"; number: string; url?: never };
-export type TaskRepositoryLink = { kind: "issue" | "pull_request"; number: string; canonical_url: string };
+export type RepositoryLinkInput = { url: string; kind?: never; number?: never; title?: string } | { kind: "issue" | "pull_request"; number: string; url?: never; title?: string };
+export type TaskRepositoryLink = { kind: "issue" | "pull_request"; number: string; canonical_url: string; title?: string };
 export type TaskRepositoryInput = { repo_id: string; directory_alias?: string; requested_ref?: RequestedRef; links?: RepositoryLinkInput[] };
 export type TaskRepository = Omit<TaskRepositoryInput, "links" | "requested_ref"> & {
   requested_ref: RequestedRef; source_snapshot: RepositorySourceSnapshot; links: TaskRepositoryLink[];
@@ -37,17 +37,33 @@ export function repositoryRelativePath(layout: RepositoryLayout, alias: string, 
   if (layout === "root" && count === 1) return ".";
   return layout === "container" && !!alias && validRepositoryAlias(alias) ? alias : undefined;
 }
+const MAX_LINK_TITLE_BYTES = 1024;
+/**
+ * The server trims a source title and refuses controls or more than 1,024 UTF-8 bytes. Reading and writing with the
+ * same rule keeps a saved title displayable and a draft saveable; an absent or empty title stays absent, never guessed.
+ */
+export function repositoryLinkTitle(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const title = value.trim();
+  if (!title || /\p{Cc}/u.test(title) || new TextEncoder().encode(title).length > MAX_LINK_TITLE_BYTES) return undefined;
+  return title;
+}
 export function repositoryDraft(rows: TaskRepository[]): TaskRepositoryInput[] {
   return rows.map((row) => ({ repo_id: row.repo_id, directory_alias: row.directory_alias, requested_ref: { ...row.requested_ref },
-    links: row.links.map(({ kind, number }) => ({ kind, number })) }));
+    links: row.links.map(({ kind, number, title }) => {
+      const kept = repositoryLinkTitle(title);
+      return { kind, number, ...(kept ? { title: kept } : {}) };
+    }) }));
 }
 
 /** One issue or pull request of a bound repository, ready to display. */
-export type RepositoryLinkView = { kind: "issue" | "pull_request"; number: string; url: string; label: string };
+export type RepositoryLinkView = { kind: "issue" | "pull_request"; number: string; url: string; label: string; title?: string };
 const LINK_SEGMENTS = {
   github: { issue: "issues", pull_request: "pull" },
   gitlab: { issue: "-/issues", pull_request: "-/merge_requests" },
 } as const;
+const linkURL = (identity: RepositoryIdentity, kind: "issue" | "pull_request", number: string) =>
+  `${identity.canonical_url}/${LINK_SEGMENTS[identity.provider as keyof typeof LINK_SEGMENTS][kind]}/${number}`;
 
 /**
  * Reads an issue/PR link of a repository from either form the store accepts: a pasted URL (held to the saved identity
@@ -77,8 +93,22 @@ export function repositoryLinkView(identity: RepositoryIdentity, link: TaskRepos
     kind = link.kind; number = link.number;
   }
   if ((kind !== "issue" && kind !== "pull_request") || !number || !/^[1-9][0-9]{0,19}$/.test(number)) return null;
+  const url = linkURL(identity, kind, number);
+  // A saved link's canonical URL must still name this repository and this number. A title belongs to that exact link,
+  // never to another repository or number that happens to be in the same response.
+  if ("canonical_url" in link && link.canonical_url !== url) return null;
   const label = kind === "issue" ? `#${number}` : `${identity.provider === "gitlab" ? "MR !" : "PR #"}${number}`;
-  return { kind, number, url: `${identity.canonical_url}/${segments[kind]}/${number}`, label };
+  const title = repositoryLinkTitle(link.title);
+  return { kind, number, url, label, ...(title ? { title } : {}) };
+}
+/** The same canonical-source check for a saved link, used before trusting a response's kind, number, URL or title. */
+export function validTaskRepositoryLink(identity: RepositoryIdentity, link: TaskRepositoryLink): boolean {
+  const segments = LINK_SEGMENTS[identity.provider as keyof typeof LINK_SEGMENTS];
+  if (!segments || !link || !["issue", "pull_request"].includes(link.kind) || typeof link.number !== "string"
+    || !/^[1-9][0-9]{0,19}$/.test(link.number)) return false;
+  if (link.canonical_url !== linkURL(identity, link.kind, link.number)) return false;
+  // An empty title is the older servers' "none"; a nonempty one must be exactly what the server accepted (trimmed).
+  return link.title === undefined || link.title === "" || repositoryLinkTitle(link.title) === link.title;
 }
 const revision = (n: unknown): n is number => Number.isSafeInteger(n) && (n as number) >= 0;
 // Check the server-owned envelope; repository normalization remains in the shared parser.
@@ -102,8 +132,7 @@ export function validRepositorySet(set: TaskRepositorySet, manager: string, todo
       && validRequestedRef(row.requested_ref) && row.source_snapshot && validIdentity(row.source_snapshot.identity)
       && typeof row.source_snapshot.clone_url === "string" && revision(row.source_snapshot.catalog_revision)
       && ["catalog", "canonical_default"].includes(row.source_snapshot.transport_origin)
-      && Array.isArray(row.links) && row.links.every((link) => ["issue", "pull_request"].includes(link.kind)
-        && typeof link.number === "string" && /^[1-9][0-9]{0,19}$/.test(link.number) && typeof link.canonical_url === "string"));
+      && Array.isArray(row.links) && row.links.every((link) => validTaskRepositoryLink(row.source_snapshot.identity, link)));
 }
 export type RepositoryRequestContext = { manager: string; owner: string; token: string; isCurrent: () => boolean };
 export function repositoryRequestContext(manager: string, owner: string, active: () => boolean): RepositoryRequestContext {
@@ -134,7 +163,14 @@ export async function saveTaskRepositories(context: RepositoryRequestContext, to
 }
 
 export function cleanRepositoryDraft(rows: TaskRepositoryInput[]): TaskRepositoryInput[] {
-  return rows.map((row) => ({ ...row, links: (row.links ?? []).filter((link) => !("url" in link) || !!link.url?.trim()).map((link) => "url" in link ? { url: link.url!.trim() } : link) }));
+  return rows.map((row) => ({ ...row, links: (row.links ?? [])
+    .filter((link) => !("url" in link) || !!link.url?.trim())
+    .map((link): RepositoryLinkInput => {
+      const title = repositoryLinkTitle(link.title);
+      return "url" in link
+        ? { url: link.url!.trim(), ...(title ? { title } : {}) }
+        : { kind: link.kind, number: link.number, ...(title ? { title } : {}) };
+    }) }));
 }
 
 /** Explicit association creation stays outside the ordinary Todo client's startup path. */

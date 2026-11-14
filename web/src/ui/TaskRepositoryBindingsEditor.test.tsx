@@ -21,6 +21,16 @@ const twoLinks: TaskRepositorySet = { ...set, revision: 2, repositories: [{ ...s
   { kind: "pull_request", number: "7", canonical_url: identity.canonical_url + "/pull/7" },
   { kind: "pull_request", number: "8", canonical_url: identity.canonical_url + "/pull/8" },
 ] }] };
+const gitlabIdentity = { provider: "gitlab" as const, instance_url: "https://gitlab.example.com", path: "team/api", canonical_url: "https://gitlab.example.com/team/api" };
+const gitlabSet: TaskRepositorySet = { schema_version: 1, manager: "assistant", todo_id: "todo_example", revision: 1, repositories: [{
+  repo_id: "api", requested_ref: { kind: "default" },
+  source_snapshot: { identity: gitlabIdentity, clone_url: gitlabIdentity.canonical_url, catalog_revision: 4, transport_origin: "canonical_default" },
+  links: [{ kind: "pull_request", number: "9", canonical_url: gitlabIdentity.canonical_url + "/-/merge_requests/9" }], catalog_state: "current",
+}] };
+const titledSet: TaskRepositorySet = { ...twoLinks, repositories: [{ ...twoLinks.repositories[0], links: [
+  { kind: "pull_request", number: "7", canonical_url: identity.canonical_url + "/pull/7", title: `Fix "quoted" <b>redirect</b> for the login flow across every provider` },
+  { kind: "issue", number: "8", canonical_url: identity.canonical_url + "/issues/8", title: "Reported crash on the first screen" },
+] }] };
 
 const button = (label: string) => [...document.querySelectorAll<HTMLButtonElement>("button")].find((b) => b.textContent?.trim() === label)!;
 const click = async (label: string) => act(async () => { expect(button(label), label).toBeTruthy(); button(label).click(); });
@@ -176,6 +186,56 @@ it("keeps the last repository removed after an empty save and a reload, with no 
   expect(reloaded.textContent).toContain("No repositories linked");
 });
 
+it("draws the provider's own mark and the project address inline, with a merge mark for a GitLab merge request", async () => {
+  await render();
+  await answer(calls[0], gitlabSet);
+  const section = document.querySelector("[data-todo-repositories]")!;
+  expect(section.querySelector('[data-repository-mark="gitlab"]')).toBeTruthy();
+  const row = section.querySelector("[data-repository-row]")!;
+  expect(row.querySelector("a")!.getAttribute("href")).toBe(gitlabIdentity.canonical_url);
+  expect(row.textContent).toContain("gitlab.example.com/team/api");
+  expect(section.textContent).not.toContain("GitLab ·");
+  expect(section.querySelector('[data-link-icon="merge"]')).toBeTruthy();
+  expect(section.querySelector('a[href$="/-/merge_requests/9"]')).toBeTruthy();
+});
+
+it("puts a saved link's complete title in its single hyperlink instead of only type and number", async () => {
+  await render();
+  await answer(calls[0], titledSet);
+  const links = [...document.querySelectorAll<HTMLAnchorElement>("[data-repository-link] a")];
+  expect(links).toHaveLength(2);
+  expect(links[0].textContent).toContain(`Fix "quoted" <b>redirect</b> for the login flow across every provider`);
+  expect(links[0].textContent).toContain("#7");
+  expect(links[1].textContent).toContain("Reported crash on the first screen");
+  expect(links[1].textContent).toContain("#8");
+  // A title is plain text: markup in it is escaped, never drawn, and its line can wrap instead of being cut away.
+  expect(document.querySelector("[data-todo-repositories]")!.innerHTML).not.toContain("<b>redirect</b>");
+  const title = links[0].querySelector("span")!;
+  expect(title.textContent).toBe(`Fix "quoted" <b>redirect</b> for the login flow across every provider`);
+  expect(title.className).not.toContain("truncate");
+  expect(title.className).toContain("break-words");
+});
+
+it("keeps loaded source titles through an editor save and sends them with their own links", async () => {
+  await render();
+  await answer(calls[0], titledSet);
+  await click("Manage links");
+  await answerEditor(catalog, titledSet);
+  await settle();
+  expect(document.querySelector('[role="dialog"]')!.textContent).toContain("Reported crash on the first screen");
+  await click("Add issue or PR");
+  await typeInto(linkInput(), identity.canonical_url + "/pull/12");
+  await press(linkInput(), "Enter");
+  await click("Save");
+  const save = calls.at(-1)!;
+  expect(JSON.parse(save.init.body as string).repositories[0].links).toEqual([
+    { kind: "pull_request", number: "7", title: `Fix "quoted" <b>redirect</b> for the login flow across every provider` },
+    { kind: "issue", number: "8", title: "Reported crash on the first screen" },
+    { url: identity.canonical_url + "/pull/12" },
+  ]);
+  await answer(save, twoLinks);
+});
+
 it("ignores late results after manager, todo or credential changes", async () => {
   await render();
   const old = [...calls];
@@ -254,6 +314,7 @@ it("renders the picker as a searchable list, and Escape goes back to its button"
   await act(async () => { button("Add repository").click(); });
   const options = () => [...document.querySelectorAll<HTMLElement>('[role="option"]')];
   expect(options().map((o) => o.textContent)).toEqual([expect.stringContaining("Web app"), expect.stringContaining("Docs")]);
+  expect(options()[0].querySelector('[data-repository-mark="github"]')).toBeTruthy();
   const search = document.querySelector<HTMLInputElement>('[data-repository-picker] input')!;
   await typeInto(search, "docs");
   expect(options()).toHaveLength(1);
