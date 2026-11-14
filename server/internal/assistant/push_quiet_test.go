@@ -329,6 +329,8 @@ func TestHeldEscalationIsNotReEscalatable(t *testing.T) {
 	if err != nil || !strings.Contains(res, "without a push") {
 		t.Fatalf("first escalation: %s %v", res, err)
 	}
+	// deliver sends on a goroutine; observe the original notification before checking that retries add none.
+	waitFor(t, "the original held P1 notification", func() bool { return len(e.cardPushes("ix1")) == 1 })
 	for _, args := range []map[string]any{
 		{"todo_id": e.todo.ID, "reason": "now urgent", "p0": true},
 		{"todo_id": e.todo.ID, "reason": "now urgent", "why_owner": "irreversible"},
