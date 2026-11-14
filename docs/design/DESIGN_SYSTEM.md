@@ -2335,10 +2335,17 @@ options, style, theme or motion. See `docs/assistant/managers.md` for provider s
 Coding-work metadata belongs in the Web to-do detail's **Repositories and
 work** group; creation carries the same editor, folded, under its own optional
 button. Ordinary to-dos still require only a title. On the detail the group is
-read first and drawn as `Group` / `Row`: one row per saved repository (its icon,
-path and provider · host) with a `Pill` of its link count, and one link row per
-issue or pull request (kind mark, `PR #7` / `MR !7` / `#12`, and an external
-mark), so the associations an agent keeps show without an editor. Editing is
+read first and drawn in the existing grouped-row geometry: one row per saved
+repository with its provider's own mark, project address and a `Pill` of its
+link count, and one link row per issue or pull request. `RepositoryMark` reuses
+the bundled GitHub asset and adds GitLab's mark without extending the unrelated
+connector vocabulary. Repository names and addresses share one line; the
+association store has no physical workspace path, so directory aliases are not
+presented as filesystem paths. A link carries its complete source title as one
+hyperlink, wrapping at narrow widths, followed by its number and an external
+mark. An unknown title falls back to the localized kind and number. GitHub PRs
+use the pull-request mark, GitLab MRs the merge mark and issues the existing
+issue mark. The associations an agent keeps show without an editor. Editing is
 the existing `Dialog` with a compact text button (**Manage links**), never an
 always-open form. `TaskRepositoryBindingsEditor` is the controlled editor;
 `TodoRepositoryBindings` owns existing-todo reads and writes and
