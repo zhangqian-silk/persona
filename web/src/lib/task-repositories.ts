@@ -110,45 +110,6 @@ export function validTaskRepositoryLink(identity: RepositoryIdentity, link: Task
   // An empty title is the older servers' "none"; a nonempty one must be exactly what the server accepted (trimmed).
   return link.title === undefined || link.title === "" || repositoryLinkTitle(link.title) === link.title;
 }
-
-/** One issue or pull request of a bound repository, ready to display. */
-export type RepositoryLinkView = { kind: "issue" | "pull_request"; number: string; url: string; label: string };
-const LINK_SEGMENTS = {
-  github: { issue: "issues", pull_request: "pull" },
-  gitlab: { issue: "-/issues", pull_request: "-/merge_requests" },
-} as const;
-
-/**
- * Reads an issue/PR link of a repository from either form the store accepts: a pasted URL (held to the saved identity
- * exactly as `repository.NormalizeLink` does) or a saved kind + number. Null when it does not belong to this repository.
- */
-export function repositoryLinkView(identity: RepositoryIdentity, link: TaskRepositoryLink | RepositoryLinkInput): RepositoryLinkView | null {
-  const segments = LINK_SEGMENTS[identity.provider as keyof typeof LINK_SEGMENTS];
-  if (!segments) return null;
-  let kind: string | undefined, number: string | undefined;
-  if ("url" in link && link.url !== undefined) {
-    const raw = link.url.trim();
-    if (!raw || raw.length > 2048) return null;
-    let url: URL, base: URL;
-    try { url = new URL(raw); base = new URL(identity.canonical_url); } catch { return null; }
-    if (url.protocol !== base.protocol || !["http:", "https:"].includes(url.protocol) || url.username || url.password
-      || url.host !== base.host || url.search || url.hash) return null;
-    const prefix = base.pathname.replace(/\/$/, "") + "/";
-    for (const [candidate, segment] of Object.entries(segments)) {
-      if (!url.pathname.startsWith(prefix + segment + "/")) continue;
-      // The server reads the number to the end of the path, so a trailing slash or a deeper path is not this link.
-      const rest = url.pathname.slice(prefix.length + segment.length + 1);
-      if (!rest || rest.includes("/")) return null;
-      kind = candidate; number = rest;
-      break;
-    }
-  } else {
-    kind = link.kind; number = link.number;
-  }
-  if ((kind !== "issue" && kind !== "pull_request") || !number || !/^[1-9][0-9]{0,19}$/.test(number)) return null;
-  const label = kind === "issue" ? `#${number}` : `${identity.provider === "gitlab" ? "MR !" : "PR #"}${number}`;
-  return { kind, number, url: `${identity.canonical_url}/${segments[kind]}/${number}`, label };
-}
 const revision = (n: unknown): n is number => Number.isSafeInteger(n) && (n as number) >= 0;
 // Check the server-owned envelope; repository normalization remains in the shared parser.
 function validIdentity(identity: RepositoryIdentity): boolean {
