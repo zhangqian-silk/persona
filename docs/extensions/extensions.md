@@ -2517,7 +2517,7 @@ The component showcase's version 6 pages are `web/src/showcase/v6` (with their p
 **iOS** (#827) draws all of it, with the rest of UI version 5, and sends 6: whole pages and the native stream (`ExtensionUIContext.pageVersion`,
 `ExtensionPageStream.uiVersion`) and the app's own cards and sections (`ExtensionUIContext.cardVersion`; version 4–5's code components there read-only, `ExtensionCodeSummary`),
 every `ExtensionViewModel` saying what the app's renderer draws (`drawnByApp`). Widgets, the watch and the system extensions keep the Shared version, 3: they draw none of it.
-The frozen Mac app compiles the same code but keeps what it reported before (pages 4, the stream 5, cards 3), so the hub goes on downgrading for it (`docs/apple/mac.md`: new features skip it).
+The retired native Mac app compiled the same code but kept what it reported before (pages 4, the stream 5, cards 3), so the hub downgraded for it (`docs/archive/apple/mac.md`: new features skipped it).
 See "App: Settings › Extensions" below for each part. One difference from the web and Android: a switch that asks first has already moved when the alert shows (a system switch cannot be held where it was), and Cancel puts it back.
 
 ## System-level placements (#1858)
@@ -2673,8 +2673,9 @@ Used to connect directly to a personal Agent service (e.g. one with real-time pu
 - **Extension event to the hub** `agentsrc.updated {contribution?, session_keys?}`: these sessions changed (new messages, unread state, title); omitting `session_keys` means the list changed.
   The hub clears caches and pushes `{"type":"agents","session_ids":[…]}`, and the app refetches immediately. Only this extension's own sources are accepted. The hub also pushes after its own sends, then again at 4 / 15 / 45 seconds;
   every 60 seconds it relists all sources as a fallback.
+  The hub keeps each source's list for 20 seconds; reads that miss it at the same time (the Agents page's sections, groups and counts after a change, other open apps) share one `sessions` call, and one that comes after a change does not share a call made before it (#7204).
 - Implementation: `server/internal/extmgr/extension_agents.go`; tests `TestExtensionAgentSource` (`extension_agents_test.go`, fake extension exercises the protocol),
-  `agents.TestAddAndRemoveSources`.
+  `agents.TestAddAndRemoveSources`, `agents.TestListsMissingTheCacheTogetherAskTheSourceOnce` (`inflight_test.go`).
 
 ## Events
 
@@ -2728,7 +2729,8 @@ side conversation in `assistant.leaders`; one leader is one direction. Schema: `
   out while none; the hub files a new direction under the project most of its tasks are filed under); `ended: true`
   once it left `assistant.leaders` (nothing is deleted; made a leader again, it is sent without `ended`). Sent once per
   change: what was last told is kept in the hub's store, so a restart or a replay of the same state sends nothing.
-- **`leader.report {id, leader, kind, todo, plan?, text, link?, at, reached?, doing?, needs_you?, links?}`**: written by the hub from the task's ledger, never by a
+- **`level?`** on `leader.report`: present only while the hub's push tiering (the low-distraction switch, `docs/server/server.md`) is on: `P1` for `progress`, `reached` and `stuck`, which an extension keeps in its log and briefing without alerting anyone (no message that rings, no mention); `P0` for a `decision`. Left out with the switch off, when an extension does as before.
+- **`leader.report {id, leader, kind, todo, plan?, text, link?, at, reached?, doing?, needs_you?, links?, level?}`**: written by the hub from the task's ledger, never by a
   model; `kind` is `reached` (its review accepted it), `decision` (its review needs the owner, or a plan of the
   leader's waits for the owner's Start: then `plan` is the plan's id and `todo` is `""`, as a plan has no to-do until
   it starts; #3608) or `stuck` (in Waiting
@@ -2765,6 +2767,7 @@ Extensions with an `auth_relay` contribution (and the permission `auth_relay`) c
 When an extension decides "this needs a person", it sends a phone alert through the hub: `POST /api/v1/notify` (scope `notify`, or full access; use `PERSONA_HUB_URL` / `PERSONA_HUB_TOKEN`); parameters in `docs/protocol/protocol.md`.
 
 - **The extension chooses the level**: `active` (default, normal notification) or `time-sensitive` (breaks through Focus, vibrates the watch when the phone is locked; users can turn it off in system settings). iOS needs the app's `com.apple.developer.usernotifications.time-sensitive` entitlement to truly show it as time-sensitive; without it the system treats it as `active` (the hub's own "Needs you" pushes are affected too, see #1572). No `critical` (requires separate Apple approval) or `passive`.
+- **Urgency for push grading**: the optional `push_level` says how urgent the alert is — `P0` (must interrupt), `P1`, the default (worth knowing) or `P2` (background news). It is independent of `level` (the APNs interruption level). When the hub's push grading switch is off every level alerts as usual; when it is on, only `P0` alerts, `P1` is held for briefings and `P2` stays silent, and the same `id` (the related key) alerts at most once in 12 hours. A held alert is recorded with its reason and readable at `GET /api/v1/push/intercepts`, so the extension can avoid repeating what was held back. Reading it needs both the `notify` scope and the extension's ID in the hub's `intercept_readers` allow-list (`hub.json`); an extension not listed gets 403, and a listed one still sees its own manager's entries only (filtered before the 200-entry limit). The answer's `body` is a stored summary (title plus at most 140 runes), never the full held-push text, which can contain the owner's decision questions, agent replies or `notify_user` content; the extension gets `title`, the summary `body`, `level`, `reason`, `at`, `related_key` and the merged `also` titles — enough for an extension panel — while full credentials read through the same shape. The switch itself is readable at `GET /api/v1/push/ln-mode` (scope `notify`; only full credentials may PUT it), and `GET /api/v1/push/stats/daily` (`?days=1..14` or `?since=<RFC3339>`, scope `notify`) reports per UTC day how many of the extension's pushes were delivered (`sent`) and held (`intercepted`, with `by_reason`), counted from the hub's full records so the numbers stay exact past 200 entries. There is no "opened / handled" count: the hub has no data source for push taps.
 - **Responsibilities**: when to notify, how often per session and how to detect a stall are the extension's business; the hub only delivers and honors user settings: no notification when the device has **Needs you** (`input`) off, the session is blocked, or the phone is muted. The hub's own pushes (questions, permissions, completion) stay as before; extensions cannot intercept them and do not cause them to be sent twice.
 - **Opening**: alerts with `machine_id` + `session_id` are grouped by session and open that session on tap; without them it is just a message. Buttons are covered in "System-level placements", "Notification buttons".
 - Example: subscribe to `agent.needs_you` / `agent.finished`, then poll `GET /api/v1/sessions`; if a session is stuck waiting for confirmation (no screen reading, no interaction card created by the hub) or has been spinning for 30 minutes, send one `time-sensitive` alert, at most once per session in 30 minutes.
@@ -3051,7 +3054,7 @@ Views, components, actions, responses, placements and context all use schema-gen
   two marketplaces and their catalogs; `-tab settings -openExtensions YES` (`-openExtension <id>` opens details directly, add `-openExtensionPage <ui>` for its page and `-openExtensionManager <id>` for another manager's copy; old `-openPlugin…` forms still work),
   `-openExtensionMarket YES` (catalog), `-openExtensionMarkets YES` (marketplace management), `-openMarketExtension <marketplace id>/<extension id>`, `-openLauncherPage <launcher>`.
   UI slots: `-tab settings` shows cards and entries; `-openExtension example-gateway -openExtensionPage usage` opens usage; `-openMachines YES -openMachineDetail macbook`
-  shows the machine section. Mac uses `scripts/app/mac_shot.sh` (`DEMO=0` plus `-pairURL`); `-openMacExtensionPage example-gateway/usage` opens that sidebar page.
+  shows the machine section. Desktop uses the Electron smoke's captured web pages; iOS uses `scripts/app/sim.sh` (`DEMO=0` plus `-pairURL`); `-openMacExtensionPage example-gateway/usage` opens that sidebar page.
   UI tests `ExtensionSettingsTests`, `ExtensionMarketTests` (marketplace installation, upgrade preview, marketplace management, saving extension pages, launcher section; `TEST_RUNNER_PERSONA_EXTENSIONS_HUB`),
   `ExtensionSlotsTests` (cards, entries/badges, usage-page segmented controls and chart, opening cards, machine sections),
   unit tests `ExtensionsModelTests`, `ExtensionMarketModelTests`, `ExtensionViewModelTests`, `ExtensionSlotsModelTests`.
@@ -3094,7 +3097,7 @@ events `{"event","params"}`. Hub-started extensions use stdin / stdout, remote o
 ```json
 {"protocol": 1,
  "hub": {"build": 202611050000, "extension_points": {"computer": 1, "connectors": 2, "voice": 1}, "role": "center", "timezone": "Asia/Shanghai", "locale": "en",
-         "capabilities": ["inbox_group"]},
+         "capabilities": ["inbox_group", "inbox_group_state"]},
  "extension": {"id": "example-notes", "version": "1.2.0", "dir": "…", "data_dir": "…"},
  "config": {"base_url": "https://notes.example.com", "folders": ["work"], "include_shared": false},
  "secrets": {"api_key": "…"},
@@ -3106,7 +3109,7 @@ events `{"event","params"}`. Hub-started extensions use stdin / stdout, remote o
 `member` (another hub is primary: group work such as reacting to chat-service events, running /agent and full crawling is handed to the primary). Role changes restart extensions contributing `connectors` or `api`.
 `hub.timezone` is the user's time zone (IANA, as reported by devices), used for displayed times ("today", message timestamps); empty when only the hub's own clock is known, read at each start.
 `hub.locale` is the user's language (`zh-Hans` / `en` / `ja`, `docs/protocol/i18n.md` ("Protocol")); extensions use it for human-facing text (status, sign-in prompts, bot replies), read at each start, defaulting to `zh-Hans` if absent.
-`hub.capabilities` (#1680) lists what this hub can do so extensions can adapt: `inbox_group` (associate batches of new connector messages with Inbox events, `docs/assistant/inbox.md` ("Event grouping")).
+`hub.capabilities` (#1680) lists what this hub can do so extensions can adapt: `inbox_group` (associate batches of new connector messages with Inbox events, `docs/assistant/inbox.md` ("Event grouping")); `inbox_group_state` (a grouping connector may report the events the user read or replied to in the source, and its fallback plan may assign messages to an already handled event, which the hub accepts and reopens; `docs/assistant/inbox.md` ("Following up")).
 Missing field or entry means the hub does not do it.
 `hub.manager` is the id of the manager running the extension when it is not the built-in one (also `PERSONA_MANAGER` for a program it starts; `docs/assistant/managers.md`, "Extensions and the hub's API"); absent for the built-in manager.
 The program returns `{"protocol": 1, "id", "version", "contributes"?}`: protocol mismatch returns `wrong_protocol`
@@ -3152,6 +3155,11 @@ and the node follows (`node/plugins.go`). Reconciliation runs on computer connec
   Installation permission rows choose icons by key (`node_runs_code`, `node_network`, `node_files`, `node_macos_privacy`, `node_secrets`).
 - **Status**: every extension with a `node` section includes `nodes: [{machine_id, version, state, error?}]` in the extension list, where `state` is `running` / `starting` / `error` /
   `missing` (this computer lacks this package version) / `lease_expired` / `offline` / `outdated` (personad too old to recognize `plugin.node.*`).
+  The same view carries `node_status: {total, running, starting, stopped, offline, abnormal}` while that aggregate drives the status — it is omitted while a live hub process keeps its own status, and on the disabled / needs_setup / incompatible states. `abnormal` counts `error`, `missing`,
+  `lease_expired`, `outdated` and any state this build does not know. While the hub runs no process of its own for the extension (an on-call program that is idle, or a manifest with only
+  a `node` section), its top-level `status` follows the aggregate instead of saying `stopped`: `running` while at least one machine runs it, `error` when none run and one is abnormal,
+  `starting` while a machine is starting it, otherwise `stopped` (including every machine offline). Web, iOS and Android render one line from `node_status` with their own localized
+  plural wording ("Running on 2 machines", with the abnormal and offline counts); a view without `node_status` keeps the hub process's own status wording.
 - **Built-in node programs (cua, ego, #1830 step 5)**: computer/browser control node code lives in personad, not packages or subprocesses (`node/builtin.go`).
   The node reports `["cua", "ego"]` in `node.info`'s `builtin_programs`; the hub then calls via `plugin.node.call {id, method, params}` (`status`, `call`, `install`, `grant`, `cancel`,
   `clipboard`, `cursor`, `nolock`, `lock`; ego `status`, `install`, `open`, `cancel`, `call`, `cookies.list/import/clear`). Old nodes not reporting them use `computer.*` / `browser.*`

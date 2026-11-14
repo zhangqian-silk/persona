@@ -1,7 +1,8 @@
 #!/bin/bash
 # Publish personad for anyone to install (docs/operations/release.md "Publishing personad"): build the four binaries with the web client
 # inside (no skills in them: those live in each machine's ~/.persona/skills), and the connector persona-link for the
-# same four (the node service, docs/operations/link.md), check them for private values, write the release manifest latest.json
+# same four, plus Windows amd64 and arm64 (the node service, docs/operations/link.md), check them for private values,
+# write the release manifest latest.json
 # (every file's sha256, docs/operations/hub-update.md "Public publishing"), then deploy the site/ worker with dl/ and install.sh added, at the
 # config's publish.site_url. Every hub of the release channel updates itself to it. The worker also runs the push
 # relay (/relay/*): it is deployed with it.
@@ -153,7 +154,8 @@ fi
 
 # The build number orders releases (UTC YYYYMMDDHHMM): hubs install only a larger one.
 BUILD="$(date -u +%Y%m%d%H%M)"
-VERSION="${VERSION:-$(git describe --always --dirty 2>/dev/null || echo dev)-$BUILD}"
+# The nearest vX.Y.Z tag, a lightweight one too, as deploy.sh names its builds (#7201).
+VERSION="${VERSION:-$(git describe --tags --match 'v[0-9]*' --always --dirty 2>/dev/null || echo dev)-$BUILD}"
 COMMIT="$(git rev-parse HEAD)"
 # A release is the committed code: latest.json says which commit and lists every one it contains, and a hub
 # installs a release by itself only when its own commit is among them (docs/operations/hub-update.md "No regression"). Published with
@@ -213,6 +215,12 @@ for t in linux/amd64 linux/arm64 darwin/arm64 darwin/amd64; do
   (cd server && GOOS=${t%/*} GOARCH=${t#*/} CGO_ENABLED=0 go build -tags "$TAGS" -trimpath -ldflags "$LDFLAGS" \
     -o "../$OUT/bin/persona-node-${t%/*}-${t#*/}" ./cmd/persona-node)
 done
+# The independent connector also runs on Windows. The hub, manager and node programs keep their existing platforms;
+# their update feeds do not acquire Windows entries along with the connector (docs/operations/windows.md).
+for t in windows/amd64 windows/arm64; do
+  (cd server && GOOS=${t%/*} GOARCH=${t#*/} CGO_ENABLED=0 go build -tags "$TAGS" -trimpath -ldflags "$LDFLAGS" \
+    -o "../$OUT/bin/persona-link-${t%/*}-${t#*/}.exe" ./cmd/persona-link)
+done
 # The hub and manager programs are released and swapped together with personad (update.ProgramNames).
 for t in linux/amd64 linux/arm64 darwin/arm64 darwin/amd64; do
   # The hub's and the manager's own programs (docs/server/server.md "Programs"): the same code as personad's hub and
@@ -253,7 +261,7 @@ python3 scripts/release/check_bundle_skills.py "$OUT/bin/persona-manager-linux-a
 host_bin="$OUT/bin/personad-$(uname -s | tr A-Z a-z)-$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')"
 [ "$("$host_bin" version)" = "$VERSION" ] || { echo "the built personad does not report $VERSION" >&2; exit 1; }
 host_link="$OUT/bin/persona-link-${host_bin##*/personad-}"
-[ "$("$host_link" version)" = "$VERSION" ] || { echo "the built persona-link does not report $VERSION" >&2; exit 1; }
+[ "$("$host_link" version -v)" = "$("$host_bin" version -v)" ] || { echo "persona-link is not the same build as personad" >&2; exit 1; }
 host_node="$OUT/bin/persona-node-${host_bin##*/personad-}"
 [ "$("$host_node" version -v)" = "$("$host_bin" version -v)" ] || { echo "persona-node is not the same build as personad" >&2; exit 1; }
 "$host_bin" version -v | grep -qx "channel release, build $BUILD" || { echo "the built personad is not release build $BUILD" >&2; exit 1; }
@@ -315,7 +323,7 @@ done
 # The versioned copies, kept: release/<version>/ (and release/X.Y.Z/ when the release is the tag vX.Y.Z, the version
 # of the Docker image built from that tag), the node builds and the manifest only: a manager fetches a node build from
 # there (docs/operations/node-update.md). The tag is looked up among all the commit's tags (release.sh tags it testflight/<build>
-# too, and a lightweight vX.Y.Z is not what git describe picks).
+# too).
 VERSIONS=("$VERSION")
 # A build with changes not committed (-dirty) is not the tag's release, and gets no alias.
 if [[ "$VERSION" != *-dirty* ]] && tag="$(git tag --points-at HEAD | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | head -1)" && [ -n "$tag" ]; then

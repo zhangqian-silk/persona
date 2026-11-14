@@ -19,11 +19,16 @@ enum VNCMode: String, CaseIterable {
 /// - Trackpad Mode: one finger moves the pointer by as much; a tap clicks where it is; a tap then a drag drags; two only
 ///   scroll, never zoom (#6196: pinching zoomed by mistake while scrolling). Zoomed in from ⋯, the picture follows the
 ///   pointer.
-/// Two fingers scroll as VNCWheel says: a notch every few points, coasting after a flick.
+/// Two fingers scroll as VNCWheel says: slowly the Mac's content follows them (a notch a Mac point), quicker drags go
+/// further, the notches go out a display frame at a time, and a flick coasts.
 /// With `region` set (one of the Mac's displays, #80) only that part of the framebuffer is shown, zoomed and touched;
 /// what is sent still carries whole-framebuffer pixels.
 final class VNCScreenUIView: UIView, UIGestureRecognizerDelegate {
     let display = AVSampleBufferDisplayLayer()
+    /// The video channel's picture (#3954), over RFB's on its display while it shows.
+    let video = AVSampleBufferDisplayLayer()
+    /// This view shows the video channel (the page's; the small window's source shows RFB's picture only).
+    var showsVideo = false
     /// Holds the picture and cuts it to the part shown.
     private let clip = CALayer()
     private let pointerLayer = CALayer()
@@ -60,10 +65,15 @@ final class VNCScreenUIView: UIView, UIGestureRecognizerDelegate {
     private var laidOut = CGSize.zero
     /// What the two fingers down are doing in Mouse Mode: scrolling or pinching.
     private var two = VNCTwoFingers()
-    /// Two fingers turned into the wheel, and where it goes (a coast keeps going there after they let go).
+    /// Two fingers turned into the wheel, and where it goes (a coast keeps going there after they let go); its notches
+    /// go out a display frame at a time while it has any to send or coasts.
     private var wheel = VNCWheel()
     private var wheelAt = CGPoint.zero
-    private var coast: CADisplayLink?
+    private var wheelFrames: CADisplayLink?
+    /// Framebuffer pixels a point of the Mac's screen, read as two fingers go down (a notch scrolls a Mac point), and
+    /// Settings' Scroll Speed then.
+    private var macScale: CGFloat = 1
+    private var scrollSpeed: CGFloat = 1
     private var lastTap = Date.distantPast
     private var dragging = false
     private var lastPan = CGPoint.zero
@@ -75,6 +85,9 @@ final class VNCScreenUIView: UIView, UIGestureRecognizerDelegate {
         display.videoGravity = .resize
         clip.masksToBounds = true
         clip.addSublayer(display)
+        video.videoGravity = .resizeAspect
+        video.isHidden = true
+        clip.addSublayer(video)
         layer.addSublayer(clip)
         pointerLayer.contentsGravity = .resizeAspect
         layer.addSublayer(pointerLayer)
@@ -156,6 +169,14 @@ final class VNCScreenUIView: UIView, UIGestureRecognizerDelegate {
         let port = viewport
         clip.frame = port.rect
         display.frame = port.framebufferFrame(screenSize)
+        #if os(iOS) && canImport(PersonaScreenKit)
+        if showsVideo, let v = session?.video {
+            video.isHidden = !v.showing
+            // RFB's picture is held (stale) while video shows: hidden, so a video of another shape leaves black, not it.
+            display.isHidden = v.showing
+            video.frame = port.frame(of: v.rect ?? CGRect(origin: .zero, size: screenSize))
+        }
+        #endif
         if let onPicture, let window, bounds.width > 0 {
             let whole = convert(display.frame.offsetBy(dx: port.rect.minX, dy: port.rect.minY), to: window.windowScene?.screen.coordinateSpace ?? window)
             if whole != reported {
@@ -177,9 +198,9 @@ final class VNCScreenUIView: UIView, UIGestureRecognizerDelegate {
             #if DEBUG
             // UI tests measure (the frame rate, the latency) and look (the pointer's size in points, #3075; the zoom and
             // where the pointer is drawn, #6196).
-            accessibilityValue = String(format: "fps=%.0f;latency=%.0f;mode=%@;pointer=%.0fx%.0f;zoom=%.2f;at=%.0f,%.0f", // i18n-ignore
+            accessibilityValue = String(format: "fps=%.0f;latency=%.0f;mode=%@;pointer=%.0fx%.0f;zoom=%.2f;at=%.0f,%.0f;picture=%@", // i18n-ignore
                                         s.fps, s.latency ?? -1, mode.rawValue, pointerLayer.frame.width, pointerLayer.frame.height,
-                                        port.rect.width / max(fitted.width, 1), at.x, at.y)
+                                        port.rect.width / max(fitted.width, 1), at.x, at.y, video.isHidden ? "vnc" : "video") // i18n-ignore
             #endif
         }
         CATransaction.commit()
@@ -289,7 +310,11 @@ final class VNCScreenUIView: UIView, UIGestureRecognizerDelegate {
         guard let s = session else { return }
         let lifted = g.state == .ended || g.state == .cancelled || g.state == .failed
         defer { if lifted { two.ended() } }
-        if g.state == .began { wheel.began() }
+        if g.state == .began {
+            wheel.began()
+            macScale = VNCDisplays.pixelsPerMacPoint(AppModel.shared.screenDisplays(s.ref), framebuffer: s.size)
+            scrollSpeed = VNCScrollSpeed.current.factor
+        }
         // Trackpad Mode: only a scroll. Mouse Mode: a scroll or a pinch, whichever the fingers show first; until then the
         // travel stays in the translation, for the scroll.
         let meaning: VNCTwoFingers.Meaning = mode == .trackpad ? .scroll
@@ -309,35 +334,36 @@ final class VNCScreenUIView: UIView, UIGestureRecognizerDelegate {
             g.setTranslation(.zero, in: self)
             return
         }
-        let zoom = rect.width / fitted.width
+        // Mac points a view point at this zoom: slowly, the Mac's content moves as far as the fingers over its picture.
+        let perPoint = viewport.pixelsPerPoint / macScale * scrollSpeed
         wheelAt = mode == .mouse ? toScreen(g.location(in: self)) : pointer(s)
-        let notches = wheel.moved(t.y, zoom: zoom)
+        let velocity = g.velocity(in: self).y
+        wheel.moved(t.y, velocity: velocity, perPoint: perPoint)
         g.setTranslation(.zero, in: self)
-        if notches != 0 { s.scroll(notches: notches, at: wheelAt) }
-        if g.state == .ended {
-            wheel.released(velocity: g.velocity(in: self).y, zoom: zoom)
-            if wheel.coasting { startCoast() }
+        if g.state == .ended { wheel.released(velocity: velocity, perPoint: perPoint) }
+        if wheel.busy, wheelFrames == nil {
+            let link = CADisplayLink(target: self, selector: #selector(wheelFrame(_:)))
+            link.add(to: .main, forMode: .common)
+            wheelFrames = link
         }
     }
 
-    private func startCoast() {
-        coast?.invalidate()
-        let link = CADisplayLink(target: self, selector: #selector(coasted(_:)))
-        link.add(to: .main, forMode: .common)
-        coast = link
-    }
-
-    @objc private func coasted(_ link: CADisplayLink) {
-        let notches = wheel.tick(link.targetTimestamp - link.timestamp)
+    /// A display frame: the wheel's notches due now; none left and not coasting, the frames stop (what is left over
+    /// stays for the fingers' next move).
+    @objc private func wheelFrame(_ link: CADisplayLink) {
+        let notches = wheel.frame(link.targetTimestamp - link.timestamp)
         if notches != 0 { session?.scroll(notches: notches, at: wheelAt) }
-        if !wheel.coasting { stopCoast() }
+        if !wheel.busy {
+            link.invalidate()
+            wheelFrames = nil
+        }
     }
 
-    /// A touch, or the view going away, stops a coast where it is.
+    /// A touch, or the view going away, stops a coast where it is, with what it had not sent yet.
     private func stopCoast() {
         wheel.stop()
-        coast?.invalidate()
-        coast = nil
+        wheelFrames?.invalidate()
+        wheelFrames = nil
     }
 
     override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
@@ -440,6 +466,10 @@ struct VNCScreen: UIViewRepresentable {
         v.onZoom = onZoom
         v.onPicture = onPicture
         session.show(in: v.display)
+        #if os(iOS) && canImport(PersonaScreenKit)
+        v.showsVideo = true
+        session.video.show(in: v.video)
+        #endif
         onView(v)
         return v
     }
@@ -451,11 +481,17 @@ struct VNCScreen: UIViewRepresentable {
         v.interactive = interactive
         v.region = region
         _ = (session.pointer, session.size, session.cursor?.width, session.phase, session.fps) // redrawn as they change
+        #if os(iOS) && canImport(PersonaScreenKit)
+        _ = (session.video.showing, session.video.rect)
+        #endif
         v.place()
     }
 
     static func dismantleUIView(_ v: VNCScreenUIView, coordinator: ()) {
         v.session?.hide(from: v.display)
+        #if os(iOS) && canImport(PersonaScreenKit)
+        v.session?.video.hide(from: v.video)
+        #endif
     }
 }
 #else

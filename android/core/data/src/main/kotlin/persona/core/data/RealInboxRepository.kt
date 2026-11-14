@@ -61,11 +61,14 @@ class RealInboxRepository(
     private val refreshWindowMillis: Long = 1_000,
     /** Whether the hub shows source subscriptions (#2041). */
     private val subscriptionsShownFlow: Flow<Boolean> = flowOf(false),
+    /** Whether those pages are Inbox Sources (#5278, `inbox_sources`). */
+    private val inboxSourcesShownFlow: Flow<Boolean> = flowOf(false),
     // Last, so existing callers that pass it as a trailing lambda keep compiling.
     private val download: suspend (InboxAssistantTransport, LarkPart.File) -> String,
 ) : persona.feature.inbox.InboxRepository {
     override val supportsThreadOutbox: Boolean get() = sendThread != null
     override val subscriptionsShown: Flow<Boolean> get() = subscriptionsShownFlow
+    override val inboxSourcesShown: Flow<Boolean> get() = inboxSourcesShownFlow
     override val personaOutbox = mainConversationSender?.outbox ?: MutableStateFlow(emptyList())
     override val connectionState: Flow<ConnectionState> = hubConnection?.state ?: connection.current.map {
         if (it == null) ConnectionState.Connecting else ConnectionState.Online
@@ -1328,7 +1331,7 @@ class RealInboxRepository(
             InboxItem(data.string("id"), data.string("account"), data.string("kind"), data.string("title"),
                 data.optional("sender"), data.string("preview"), data.optional("summary"), data.optional("tier"),
                 data.optional("updated_at"), data.optional("done_at"), data.optional("version"),
-                notice = moment?.optional("notice"), status = event.status, urgent = event.urgent),
+                notice = moment?.optional("notice"), status = event.status, urgent = event.urgent, where = event.where),
             sourceLabel = data.optional("account_name") ?: DataText.of(if (data.string("source") == "lark") Key.SourceLark else Key.SourceMail),
             feedId = lark?.optional("feed_id"), startPosition = lark?.number("start_position"), count = data.number("count")?.toInt() ?: 0,
             agent = agent?.let { InboxAgent(it.string("state"), it.string("draft"), it.optional("note") ?: it.string("reason"),
