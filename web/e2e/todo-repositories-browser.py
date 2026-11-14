@@ -164,11 +164,10 @@ owned_tabs = set()
 
 
 def open_fixture_tab(url):
-    new_tab(url)
-    tab = current_tab()
-    target = tab.get("target_id") or tab.get("targetId")
-    if target:
-        owned_tabs.add(target)
+    # Supplying a URL may reuse a blank tab; create one explicitly before taking ownership.
+    target = new_tab()
+    owned_tabs.add(target)
+    goto_url(url)
 
 
 def fresh_tab():
